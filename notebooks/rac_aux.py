@@ -1,4 +1,9 @@
 """ 
+
+Here we collect only those functions needed
+scipy.optimize.least_squares() based minimization
+
+
 the RAC-models fit negative energies E depending on a 
 strength parameter lambda: E(lambda)
     
@@ -31,7 +36,7 @@ This can be done by a minimizer or by non-linear least_squares
   for least_squared the matrix d(model(k[i])-lambda[i])/d(parameter[j]) 
 - minimize takes one function that returns f, and grad f, least_squares doesn't
 
-- no experience with more than 4 parameters yet
+- least_squares seems rock stable for rac-42, too
 
 """
 
@@ -63,28 +68,12 @@ def linear_extra(ls, Es):
 
 def chi2_gen(params, ks, k2s, lbs, pade):
     """
-    chi2 = mean of squared deviations 
+    chi2 = mean of squared deviations
+    passed to basin_hopping()
+    the least_squares() wrapper function needs to return 2*res.cost/len(ks)
     """
-    #diffs = pade(ks, k2s, params) - lbs
     diffs = pade(params, ks, k2s, lbs)
     return np.sum(np.square(diffs)) / len(ks)
-
-def chi2_gen_j(params, ks, k2s, lbs, pade):
-    """
-    chi2 = mean of squared deviations and its analytical gradient
-    this is for minimize() setups
-    pade() returns f and grad_f
-    chi2 and its gradient are computed explicitly
-    """
-    n_kappa = len(ks)
-    n_param = len(params)
-    fs, dfs = pade(ks, k2s, params)
-    diffs = fs - lbs
-    chi2 = np.sum(np.square(diffs)) / n_kappa
-    dchi2 = np.zeros(n_param)
-    for ip in range(n_param):
-        dchi2[ip] = 2./n_kappa * np.sum(diffs*dfs[ip])
-    return chi2, dchi2
 
 def pade_gen_j_lsq(params, ks, k2s, lbs, pade_lsq, step=1e-5, tiny=1e-8):
     """
@@ -103,41 +92,6 @@ def pade_gen_j_lsq(params, ks, k2s, lbs, pade_lsq, step=1e-5, tiny=1e-8):
         dm = pade_lsq(pm, ks, k2s, lbs)
         dfs[ip,:] = (dp-dm)/(2*h)
     return np.transpose(dfs)
-
-def pade_31(k, ksq, params):
-    """ 
-    computes the model function rac-31 from the input (vector) k
-    ksq = k**2 is computed only once
-    """
-    l0, a, b, d = params
-    a4b2=a*a*a*a + b*b
-    aak2=a*a*k*2
-    ddk=d*d*k
-    num = (ksq + aak2 + a4b2) * (1 + ddk)
-    den = a4b2 + aak2 + ddk*a4b2
-    return l0 * num / den
-
-def pade_31j(k, ksq, params):
-    """
-    Pade [3,1] with analytical gradient
-    """
-    l, a, b, d = params
-    a2 = a*a
-    b2 = b*b
-    d2 = d*d
-    a4b2 = a2*a2 + b2
-    aak2 = a2*k*2
-    ddk = d2*k
-    fr1 = (ksq + aak2 + a4b2)
-    fr2 = (1 + ddk)
-    den = a4b2 + aak2 + ddk*a4b2
-    dl = fr1*fr2/den
-    f = l*dl
-    da = -4*a*ksq*l * fr2 * (a2*a2*d2 + a2*fr2 - b2*d2 + k) / den**2
-    db = -2*b*ksq*l * fr2 * (2*a2*d2 + fr2) / den**2
-    dd = 4*a2*d*ksq*l * fr1/den**2
-    return f, np.array([dl, da, db, dd])
-
 
 def pade_31_lsq(params, k, ksq, lmbda):
     """
@@ -159,17 +113,15 @@ def pade_31_lsq(params, k, ksq, lmbda):
 def pade_31j_lsq(params, k, ksq, lbs):
     """
     'jac' for pade_31_lsq
-    arguments must be identical with pade_31_lsq()
-    del pade-31(k[i])/del paras[j] 
+    arguments must be identical with pade_lsq()
+    computes the matrix del pade(k[i])/del para[j] 
     returns the M-by-N matrix needed by scipy.optimize.least_squares
     M = number of data points
     N = number of parameters
     least_squares() needs the transpose 
     """
     l, a, b, d = params
-    a2 = a*a
-    b2 = b*b
-    d2 = d*d
+    a2, b2, d2 = a*a, b*b, d*d
     a4b2 = a2*a2 + b2
     aak2 = a2*k*2
     ddk = d2*k
@@ -194,11 +146,7 @@ def pade_42_lsq(params, k, ksq, lmbda):
     with d**2=1/(a**4+b**2)  and g**2=2*a**2/(a**4+b**2)
     """
     l0, a, b, g, d, o = params
-    A = a**2 
-    B = b**2
-    G = g**2
-    D = d**2
-    O = o**2
+    A, B, G, D, O = a**2, b**2, g**2, d**2, o**2
     TA = 2*A
     A2B = A*A + B
     C = TA + G*A2B
@@ -208,24 +156,18 @@ def pade_42_lsq(params, k, ksq, lmbda):
     f = l0 * f1 * f2 / den
     return f - lmbda
 
-
 def pade_42j_lsq(params, k, ksq, lmbda):
     """
-    model to fit f(k[i]) to lmbda[i]
-    ksq = k**2 is computed only once
-    params: [lambda0, alpha, beta, gamma, delta, omega]
-    For details see DOI: 10.1140/epjd/e2016-70133-6
-    returns d/d(param_j) f(k_i) as a matrix for least_squares()  
-    uses Roman's new factorization:
-    divide the second factor by a**4 + b**2 so that is becomes 1 + g**2*k + d**2*k**2
-    with d**2=1/(a**4+b**2)  and g**2=2*a**2/(a**4+b**2)
+    'jac' for pade_42_lsq
+    arguments must be identical with pade_lsq()
+    computes the matrix del pade(k[i])/del para[j] 
+    returns the M-by-N matrix needed by scipy.optimize.least_squares
+    M = number of data points
+    N = number of parameters
+    least_squares() needs the transpose 
     """
     l0, a, b, g, d, o = params
-    A = a**2 
-    B = b**2
-    G = g**2
-    D = d**2
-    O = o**2
+    A, B, G, D, O = a**2, b**2, g**2, d**2, o**2
     TA = 2*A
     A2B = A*A + B
     C = TA + G*A2B
@@ -241,3 +183,63 @@ def pade_42j_lsq(params, k, ksq, lmbda):
     return np.transpose(np.array([dl0, da, db, dg, dd, do]))
 
 
+def pade_53_lsq(params, k, ksq, lmbda):
+    """
+    model to fit f(k[i]) to lmbda[i]
+    ksq = k**2 is computed only once
+    params: [lambda0, alpha, beta, gamma, delta, omega]
+    returns f(k) - lbs
+    For details of the basic method see DOI: 10.1140/epjd/e2016-70133-6
+    Roman's new factorization:
+    divide the second factor by a**4 + b**2 so that is becomes 1 + g**2*k + d**2*k**2
+    with d**2=1/(a**4+b**2)  and g**2=2*a**2/(a**4+b**2)
+    """
+    l0, a, b, g, d, e, o, r = params
+    A, B, G, D, E, O, R = a**2, b**2, g**2, d**2, e**2, o**2, r**2
+    TA = 2*A
+    A2B = A*A + B
+    C = TA + (G+E)*A2B
+    f1 = ksq + TA*k + A2B
+    f2 = 1 + G*k + D*ksq
+    f3 = 1 + E*k
+    den = A2B + C*k + O*ksq + R*k*ksq
+    f = l0 * f1 * f2 *f3 / den
+    return f - lmbda
+
+def pade_53j_lsq(params, k, ksq, lmbda):
+    """
+    'jac' for pade_53_lsq
+    arguments must be identical with pade_lsq()
+    computes the matrix del pade(k[i])/del para[j] 
+    returns the M-by-N matrix needed by scipy.optimize.least_squares
+    M = number of data points
+    N = number of parameters
+    least_squares() needs the transpose 
+    """
+    l0, a, b, g, d, e, o, r = params
+    A, B, G, D, E, O, R = a**2, b**2, g**2, d**2, e**2, o**2, r**2
+    TA = 2*A
+    A2B = A*A + B
+    C = TA + (G+E)*A2B
+    f1 = ksq + TA*k + A2B
+    f2 = 1 + G*k + D*ksq
+    f3 = 1 + E*k
+    den = A2B + C*k + O*ksq + R*k*ksq
+
+    dl0 = f1 * f2 * f3 / den
+    
+    da = 4*a*ksq*l0 * f2 * f3 * (-A*A*(E+G) + A*O - A + B*(E+G) + (A*(R-E-G) + O - 1)*k + R*ksq) / den**2
+
+    db = 2*b*ksq*l0 * f2 * f3 * (-TA*(E+G) + O - 1 + (R-E-G)*k) / den**2
+    
+    dg = 2*g*ksq*l0 * f1 * f3 * (TA + A2B*E + (O - A2B*D)*k + R*ksq) / den**2
+
+    dd = 2*d*ksq*l0 * f1 * f3 / den
+
+    de = 2*e*ksq*l0 * f1 * f2 * (A2B*G + TA + O*k + R*ksq) / den**2
+
+    do = -2*o*ksq*l0 * f1 * f2 * f3 / den**2
+
+    dr = -2*r*ksq*k*l0 * f1 * f2 * f3 / den**2
+
+    return np.transpose(np.array([dl0, da, db, dg, dd, de, do, dr]))
