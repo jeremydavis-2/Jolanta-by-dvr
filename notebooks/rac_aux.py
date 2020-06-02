@@ -72,6 +72,9 @@ def chi2_gen(params, ks, k2s, lbs, pade):
 def chi2_gen_j(params, ks, k2s, lbs, pade):
     """
     chi2 = mean of squared deviations and its analytical gradient
+    this is for minimize() setups
+    pade() returns f and grad_f
+    chi2 and its gradient are computed explicitly
     """
     n_kappa = len(ks)
     n_param = len(params)
@@ -82,6 +85,24 @@ def chi2_gen_j(params, ks, k2s, lbs, pade):
     for ip in range(n_param):
         dchi2[ip] = 2./n_kappa * np.sum(diffs*dfs[ip])
     return chi2, dchi2
+
+def pade_gen_j_lsq(params, ks, k2s, lbs, pade_lsq, step=1e-5, tiny=1e-8):
+    """
+    for testing the pade_j_lsq() functions used in least_squares() setups
+    never used in production runs, rather use the interal gradient
+    """
+    n_kappa = len(ks)
+    n_param = len(params)
+    p0 = list(params)
+    dfs = np.zeros((n_param,n_kappa))
+    for ip in range(n_param):
+        h = step*params[ip] + tiny
+        pp = np.array(p0[:ip] + [p0[ip]+h] + p0[ip+1:])
+        pm = np.array(p0[:ip] + [p0[ip]-h] + p0[ip+1:])
+        dp = pade_lsq(pp, ks, k2s, lbs)
+        dm = pade_lsq(pm, ks, k2s, lbs)
+        dfs[ip,:] = (dp-dm)/(2*h)
+    return np.transpose(dfs)
 
 def pade_31(k, ksq, params):
     """ 
@@ -211,7 +232,7 @@ def pade_42j_lsq(params, k, ksq, lmbda):
     f1 = ksq + TA*k + A2B
     f2 = 1 + G*k + D*ksq
     den = A2B + C*k + O*ksq
-    dl0 = l0 * f1 * f2 / den
+    dl0 = f1 * f2 / den
     da = -4*a*ksq*l0 * f2 * (A*A*G - A*O + A - B*G + (A*G - O + 1)*k) / den**2
     db = -2*b*ksq*l0 * f2 * (TA*G -O + 1 + G*k) / den**2
     dg = -2*g*ksq*l0 * f1 * ((A*A*D + B*D - O)*k - TA) / den**2
