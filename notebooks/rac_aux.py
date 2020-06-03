@@ -37,9 +37,16 @@ This can be done by a minimizer or by non-linear least_squares
 - minimize takes one function that returns f, and grad f, least_squares doesn't
 
 - least_squares seems rock stable for rac-42, too
+- the solution for rac-53 looks OK (good start parameters from [3,1] and [4,2])
+- gradients for [5,3] work Jun 2, 2020
+
+
+Jun 3, 2020 putting in weights: ramifications for all pade and all jacobian functions
+       works for pade_31, should work for 42 and 53
 
 """
 
+import sys
 import numpy as np
 from scipy.optimize import curve_fit
 
@@ -66,16 +73,68 @@ def linear_extra(ls, Es):
     popt, pcov = curve_fit(f, ls, Es)
     return f(0,popt[0],popt[1])
 
-def chi2_gen(params, ks, k2s, lbs, pade):
+def weights(M, kind, E0=0, Es=None, tiny=1e-8):
+    """
+    weights for the least_squares() fitting functions
+    least_squares computes the cost function: F(x) = 0.5 * sum f_i**2
+    the user has to supply a callable f()
+    
+    M : number of data points
+    kind : kind of weights returned
+    returns a numpy array of M sigmas (sqrt(weights)) 
+    
+    kind = 'ones'
+    all sigmas are equal to sqrt(1/M), this should be equivalent to the implicit-one-weights implementation
+    f[i] = rac(k_i) - lambda_i, where the sum of the weights
+    sum_i 1 = M = len(ks) was factored from the expression giving chi2 = 2*res.cost/len(ks))
+
+    as weights may be non-equal, we work with normalized weights throughout:
+    f[i] = (rac(k_i) - lambda_i)*sigma_i with sum_i sigma_i**2 = 1 and chi2 = 2*res.cost
+    
+    kind = 'energy'
+    sigma**2 is a maxium for E0 and falls linearly off to zero for Es[0] and Es[-1] 
+    """
+    if 'one' in kind:
+        sigmas = np.ones(M) * np.sqrt(1/M) 
+    elif 'energy' in kind:
+        if len(Es) != M:
+            sys.exit('Error in weights(): M and Es have con')
+        ws = np.zeros(M)
+        # line equations for Es greater and smaller than E0
+        # all Es are negative, but E[0] is closest to zero
+        # for vertical lines, use m=0, b=1
+        if abs(E0-Es[0]) < tiny:
+            m1 = 0
+            b1 = 1
+        else:
+            m1 = 1/(E0-Es[0])
+            b1 = 1 - m1*E0
+        if abs(E0-Es[-1]) < tiny:
+            m2 = 0
+            b2 = 1
+        else:
+            m2 = 1/(E0-Es[-1])
+            b2 = 1 - m2*E0
+        for i in range(M):
+            if Es[i] >= E0:
+                ws[i] = m1*Es[i] + b1 + tiny
+            else:
+                ws[i] = m2*Es[i] + b2 + tiny
+        sigmas = np.sqrt(ws)/np.sqrt(np.sum(ws))
+    else:
+        sys.exit('Error in weights(): unknow kind=' + str(kind))
+    return sigmas    
+
+def chi2_gen(params, ks, k2s, lbs, sigmas, pade):
     """
     chi2 = mean of squared deviations
     passed to basin_hopping()
     the least_squares() wrapper function needs to return 2*res.cost/len(ks)
     """
-    diffs = pade(params, ks, k2s, lbs)
-    return np.sum(np.square(diffs)) / len(ks)
+    diffs = pade(params, ks, k2s, lbs, sigmas)
+    return np.sum(np.square(diffs))
 
-def pade_gen_j_lsq(params, ks, k2s, lbs, pade_lsq, step=1e-5, tiny=1e-8):
+def pade_gen_j_lsq(params, ks, k2s, lbs, sigmas, pade_lsq, step=1e-5, tiny=1e-8):
     """
     for testing the pade_j_lsq() functions used in least_squares() setups
     never used in production runs, rather use the interal gradient
@@ -88,12 +147,12 @@ def pade_gen_j_lsq(params, ks, k2s, lbs, pade_lsq, step=1e-5, tiny=1e-8):
         h = step*params[ip] + tiny
         pp = np.array(p0[:ip] + [p0[ip]+h] + p0[ip+1:])
         pm = np.array(p0[:ip] + [p0[ip]-h] + p0[ip+1:])
-        dp = pade_lsq(pp, ks, k2s, lbs)
-        dm = pade_lsq(pm, ks, k2s, lbs)
+        dp = pade_lsq(pp, ks, k2s, lbs, sigmas)
+        dm = pade_lsq(pm, ks, k2s, lbs, sigmas)
         dfs[ip,:] = (dp-dm)/(2*h)
     return np.transpose(dfs)
 
-def pade_31_lsq(params, k, ksq, lmbda):
+def pade_31_lsq(params, k, ksq, lmbda, sigma):
     """
     model to fit f(k[i]) to lmbda[i]
     ksq = k**2 is computed only once
@@ -108,9 +167,9 @@ def pade_31_lsq(params, k, ksq, lmbda):
     num = (ksq + aak2 + a4b2) * (1 + ddk)
     den = a4b2 + aak2 + ddk*a4b2
     rac31 = l0 * num / den
-    return rac31 - lmbda
+    return (rac31 - lmbda)*sigma
 
-def pade_31j_lsq(params, k, ksq, lbs):
+def pade_31j_lsq(params, k, ksq, lbs, sigmas):
     """
     'jac' for pade_31_lsq
     arguments must be identical with pade_lsq()
@@ -132,9 +191,9 @@ def pade_31j_lsq(params, k, ksq, lbs):
     da = -4*a*ksq*l * fr2 * (a2*a2*d2 + a2*fr2 - b2*d2 + k) / den**2
     db = -2*b*ksq*l * fr2 * (2*a2*d2 + fr2) / den**2
     dd = 4*a2*d*ksq*l * fr1/den**2
-    return np.transpose(np.array([dl, da, db, dd]))
+    return np.transpose(np.array([dl, da, db, dd])*sigmas)
 
-def pade_42_lsq(params, k, ksq, lmbda):
+def pade_42_lsq(params, k, ksq, lmbda, sigma):
     """
     model to fit f(k[i]) to lmbda[i]
     ksq = k**2 is computed only once
@@ -154,9 +213,9 @@ def pade_42_lsq(params, k, ksq, lmbda):
     f2 = 1 + G*k + D*ksq
     den = A2B + C*k + O*ksq
     f = l0 * f1 * f2 / den
-    return f - lmbda
+    return (f - lmbda)*sigma
 
-def pade_42j_lsq(params, k, ksq, lmbda):
+def pade_42j_lsq(params, k, ksq, lmbda, sigmas):
     """
     'jac' for pade_42_lsq
     arguments must be identical with pade_lsq()
@@ -180,10 +239,10 @@ def pade_42j_lsq(params, k, ksq, lmbda):
     dg = -2*g*ksq*l0 * f1 * ((A*A*D + B*D - O)*k - TA) / den**2
     dd = 2*d*ksq*l0 * f1 / den
     do = -2*o*ksq*l0 * f1*f2 / den**2
-    return np.transpose(np.array([dl0, da, db, dg, dd, do]))
+    return np.transpose(np.array([dl0, da, db, dg, dd, do])*sigmas)
 
 
-def pade_53_lsq(params, k, ksq, lmbda):
+def pade_53_lsq(params, k, ksq, lmbda, sigma):
     """
     model to fit f(k[i]) to lmbda[i]
     ksq = k**2 is computed only once
@@ -204,9 +263,9 @@ def pade_53_lsq(params, k, ksq, lmbda):
     f3 = 1 + E*k
     den = A2B + C*k + O*ksq + R*k*ksq
     f = l0 * f1 * f2 *f3 / den
-    return f - lmbda
+    return (f - lmbda)*sigma
 
-def pade_53j_lsq(params, k, ksq, lmbda):
+def pade_53j_lsq(params, k, ksq, lmbda, sigmas):
     """
     'jac' for pade_53_lsq
     arguments must be identical with pade_lsq()
@@ -225,21 +284,12 @@ def pade_53j_lsq(params, k, ksq, lmbda):
     f2 = 1 + G*k + D*ksq
     f3 = 1 + E*k
     den = A2B + C*k + O*ksq + R*k*ksq
-
     dl0 = f1 * f2 * f3 / den
-    
     da = 4*a*ksq*l0 * f2 * f3 * (-A*A*(E+G) + A*O - A + B*(E+G) + (A*(R-E-G) + O - 1)*k + R*ksq) / den**2
-
     db = 2*b*ksq*l0 * f2 * f3 * (-TA*(E+G) + O - 1 + (R-E-G)*k) / den**2
-    
     dg = 2*g*ksq*l0 * f1 * f3 * (TA + A2B*E + (O - A2B*D)*k + R*ksq) / den**2
-
     dd = 2*d*ksq*l0 * f1 * f3 / den
-
     de = 2*e*ksq*l0 * f1 * f2 * (A2B*G + TA + O*k + R*ksq) / den**2
-
     do = -2*o*ksq*l0 * f1 * f2 * f3 / den**2
-
     dr = -2*r*ksq*k*l0 * f1 * f2 * f3 / den**2
-
-    return np.transpose(np.array([dl0, da, db, dg, dd, de, do, dr]))
+    return np.transpose(np.array([dl0, da, db, dg, dd, de, do, dr])*sigmas)
