@@ -152,6 +152,44 @@ def pade_gen_j_lsq(params, ks, k2s, lbs, sigmas, pade_lsq, step=1e-5, tiny=1e-8)
         dfs[ip,:] = (dp-dm)/(2*h)
     return np.transpose(dfs)
 
+def pade_21_lsq(params, k, ksq, lmbda, sigma):
+    """
+    model to fit f(k[i]) to lmbda[i]
+    ksq = k**2 is computed only once
+    params: [lambda0, alpha, beta]
+    returns model(k) - lbs
+    For details see DOI: 10.1140/epjd/e2016-70133-6
+    """
+    l0, a, b = params
+    A, B = a**2, b**2
+    TA = 2*A
+    A2B = A*A + B
+    f1 = ksq + TA*k + A2B
+    den = A2B + TA*k
+    f=l0 * f1 / den
+    return (f - lmbda)*sigma
+
+def pade_21j_lsq(params, k, ksq, lmbda, sigmas):
+    """
+    'jac' for pade_21_lsq
+    arguments must be identical with pade_lsq()
+    computes the matrix del pade(k[i])/del para[j] 
+    returns the M-by-N matrix needed by scipy.optimize.least_squares
+    M = number of data points
+    N = number of parameters
+    least_squares() needs the transpose 
+    """
+    l0, a, b = params
+    A, B = a**2, b**2
+    TA = 2*A
+    A2B = A*A + B
+    f1 = ksq + TA*k + A2B
+    den = A2B + TA*k 
+    dl0 = f1 / den
+    da = -4*a*ksq*l0 * (A + k) / den**2
+    db = -2*b*ksq*l0 / den**2
+    return np.transpose(np.array([dl0, da, db])*sigmas)
+
 def pade_31_lsq(params, k, ksq, lmbda, sigma):
     """
     model to fit f(k[i]) to lmbda[i]
@@ -192,6 +230,48 @@ def pade_31j_lsq(params, k, ksq, lbs, sigmas):
     db = -2*b*ksq*l * fr2 * (2*a2*d2 + fr2) / den**2
     dd = 4*a2*d*ksq*l * fr1/den**2
     return np.transpose(np.array([dl, da, db, dd])*sigmas)
+
+def pade_32_lsq(params, k, ksq, lmbda, sigma):
+    """
+    model to fit f(k[i]) to lmbda[i]
+    ksq = k**2 is computed only once
+    params: [lambda0, alpha, beta, delta, epsilon]
+    returns model(k) - lbs
+    For details see DOI: 10.1140/epjd/e2016-70133-6
+    """
+    l0, a, b, d, e = params
+    A, B, D, E = a**2, b**2, d**2, e**2
+    TA = 2*A
+    A2B = A*A + B
+    f1 = ksq + TA*k + A2B
+    f2 = 1 + D*k
+    den = A2B + k*(TA + D*(A2B)) + E*ksq
+    f= l0 * f1 * f2 /den
+    return (f - lmbda)*sigma
+
+def pade_32j_lsq(params, k, ksq, lmbda, sigmas):
+    """
+    'jac' for pade_32_lsq
+    arguments must be identical with pade_lsq()
+    computes the matrix del pade(k[i])/del para[j] 
+    returns the M-by-N matrix needed by scipy.optimize.least_squares
+    M = number of data points
+    N = number of parameters
+    least_squares() needs the transpose 
+    """
+    l0, a, b, d, e = params
+    A, B, D, E = a**2, b**2, d**2, e**2
+    TA = 2*A
+    A2B = A*A + B
+    f1 = ksq + TA*k + A2B
+    f2 = 1 + D*k
+    den = A2B + k*(TA + D*(A2B)) + E*ksq
+    dl0 = f1 * f2 / den
+    da = -4*a*ksq*l0 * f2 * (A*A*D + A*D*k - A*E + A - B*D - E*k + k) / den**2
+    db = -2*b*ksq*l0 * f2 * (TA*D + D*k - E + 1) / den**2
+    dd = 2*d*ksq*l0 * f1 * (TA + E*k) / den**2
+    de = -2*e*ksq*l0 * f1 * f2 / den**2
+    return np.transpose(np.array([dl0, da, db, dd, de])*sigmas)
 
 def pade_42_lsq(params, k, ksq, lmbda, sigma):
     """
